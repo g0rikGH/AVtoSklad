@@ -173,7 +173,7 @@ export class DocumentsService {
 
             if (batch) {
               if (batch.remainingQuantity < batch.originalQuantity) {
-                throw new BadRequestException(`Невозможно отменить приход товара ${row.productId}: часть товара из этой партии уже была продана.`);
+                throw new BadRequestException('Cannot revert: some items from this invoice have already been dispatched/sold');
               }
               await tx.inventoryBatch.delete({ where: { id: batch.id } });
             }
@@ -215,6 +215,49 @@ export class DocumentsService {
         console.log(`[BACKEND-ROLLBACK] Deleting document ${id}`);
         await tx.documentRow.deleteMany({ where: { documentId: id } });
         await tx.document.delete({ where: { id } });
+
+        // CLEANUP: Delete "ghost" nomenclature records that have 0 stock, 0 batches, and no other history
+        if (doc.type === 'INCOME') {
+          console.log(`[BACKEND-ROLLBACK] Checking for ghost products to clean up...`);
+          // Get all explicitly referenced product IDs from rows
+          const idsToCleanup = new Set<string>();
+          for (const row of doc.rows) {
+            idsToCleanup.add(row.productId);
+            const pInfo = productMap.get(row.productId);
+            if (pInfo && pInfo.type === 'PHANTOM' && pInfo.parentId) {
+              idsToCleanup.add(pInfo.parentId); // Check the parent too
+            }
+          }
+
+          for (const pId of Array.from(idsToCleanup)) {
+            // Check stock balance
+            const stock = await tx.stockBalance.findUnique({ where: { productId: pId } });
+            if (stock && stock.qty > 0) continue;
+
+            // Check if ANY inventory batches remain for this product (from other invoices)
+            const remainingBatches = await tx.inventoryBatch.count({ where: { productId: pId } });
+            if (remainingBatches > 0) continue;
+
+            // Check if ANY other document rows reference this product (meaning it has sales/other history)
+            // (Note: the current document rows are already deleted above)
+            const otherRows = await tx.documentRow.count({ where: { productId: pId } });
+            if (otherRows > 0) continue;
+
+            // If it's a parent product, verify it has no remaining phantom children
+            const phantoms = await tx.catalog.count({ where: { parentId: pId } });
+            if (phantoms > 0) continue;
+
+            console.log(`[BACKEND-ROLLBACK] Deleting ghost product: ${pId}`);
+            
+            // Clean up dependent records first
+            await tx.stockBalance.deleteMany({ where: { productId: pId } });
+            await tx.currentPrice.deleteMany({ where: { productId: pId } });
+            
+            // Delete the product itself
+            await tx.catalog.delete({ where: { id: pId } });
+          }
+        }
+
         console.log(`[BACKEND-ROLLBACK] Rollback COMPLETED for: ${id}`);
         return { success: true };
       });

@@ -2,6 +2,10 @@ import React, { useState, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import { Partner, Document, ProductView, Location } from '../types';
 import { FolderOpen, Plus, FileSpreadsheet, Columns, RotateCcw, CheckCheck, Eye, Download, X, AlertCircle, History, PackageOpen, MapPin, Trash2 } from 'lucide-react';
+import { useChunkedImport } from '../hooks/useChunkedImport';
+import { ImportProgress } from './ImportProgress';
+import ImportSummaryReport from './ImportSummaryReport';
+import api from '../api/axios';
 
 interface IncomeViewProps {
   suppliers: Partner[];
@@ -181,6 +185,8 @@ export default function IncomeView({ suppliers, products, documents, locations, 
       const file = e.target.files[0];
       setFileName(file.name);
       setImportStats(null); // Clear previous stats on new file select
+      setShowSummaryReport(false);
+      setFinalImportTime(null);
       setError(null);
 
       const reader = new FileReader();
@@ -205,7 +211,14 @@ export default function IncomeView({ suppliers, products, documents, locations, 
     setStep('mapping');
   };
 
+  const { isImporting, totalCount, processedCount, progress, errors: importErrors, metrics, startImport } = useChunkedImport();
+  
+  const [showSummaryReport, setShowSummaryReport] = useState(false);
+  const [finalImportTime, setFinalImportTime] = useState<string | null>(null);
+
   const handleConfirm = async () => {
+    const overallStartTime = performance.now();
+
     // Determine which column is which
     const getColumnIndex = (type: string) => {
       const entry = Object.entries(mapping).find(([col, val]) => val === type);
@@ -219,7 +232,6 @@ export default function IncomeView({ suppliers, products, documents, locations, 
     const nameIdx = getColumnIndex('colName');
     const brandIdx = getColumnIndex('colBrand');
     const locIdx = getColumnIndex('colLocation');
-    const crossIdx = getColumnIndex('colCrossType');
 
     if (artIdx === -1 || qtyIdx === -1 || prcIdx === -1) {
       setError('Необходимо указать колонки для Артикула, Количества и Цены!');
@@ -228,110 +240,98 @@ export default function IncomeView({ suppliers, products, documents, locations, 
 
     // Process real rows
     const dataRows = fileData.slice(startRow - 1);
-    const documentRows: any[] = [];
-    const locationUpdatesMap: Record<string, string> = {};
-    const localProducts = [...products];
-
-    let totalAmount = 0;
-    let totalQty = 0;
     
     setIsProcessing(true);
+    let totalAmount = 0;
+    let totalQty = 0;
+    const documentRowsData: any[] = [];
+    const locationUpdatesMap: Record<string, string> = {};
+    const importRows = [];
 
+    // 1. Initial Validation and Build ImportRows array
     for (let i = 0; i < dataRows.length; i++) {
-      const row = dataRows[i];
-      const article = String(row[artIdx] || '').trim().toUpperCase();
-      
-      const qtyVal = String(row[qtyIdx] || '0').replace(/\s+/g, '').replace(/[^\d.-]/g, '');
-      const qty = parseInt(qtyVal) || 0;
-      
-      const priceVal = String(row[prcIdx] || '0').replace(/\s+/g, '').replace(/,/g, '.').replace(/[^\d.-]/g, '');
-      const price = parseFloat(priceVal) || 0;
+        const row = dataRows[i];
+        const article = String(row[artIdx] || '').trim().toUpperCase();
+        
+        const qtyVal = String(row[qtyIdx] || '0').replace(/\s+/g, '').replace(/[^\d.-]/g, '');
+        const qty = parseInt(qtyVal) || 0;
+        
+        const priceVal = String(row[prcIdx] || '0').replace(/\s+/g, '').replace(/,/g, '.').replace(/[^\d.-]/g, '');
+        const price = parseFloat(priceVal) || 0;
 
-      const brandName = brandIdx !== -1 ? String(row[brandIdx] || '').trim().toUpperCase() : '';
-      const productName = nameIdx !== -1 ? String(row[nameIdx] || '').trim() : '';
-      const locationName = locIdx !== -1 ? String(row[locIdx] || '').trim() : '';
-      const crossTypeRaw = crossIdx !== -1 ? String(row[crossIdx] || '').trim() : '';
+        const brandName = brandIdx !== -1 ? String(row[brandIdx] || '').trim().toUpperCase() : '';
+        const productName = nameIdx !== -1 ? String(row[nameIdx] || '').trim() : '';
+        const locationName = locIdx !== -1 ? String(row[locIdx] || '').trim() : '';
 
-      if (!article) continue; // Skip empty rows
+        if (!article) continue;
 
-      if (/[А-Яа-яЁё]/.test(article)) {
-          setError(`Ошибка в строке ${startRow + i}: артикул "${article}" содержит кириллицу. Поле "Артикул" должно содержать только латиницу и символы.`);
-          setIsProcessing(false);
-          return;
-      }
-
-      if (isNaN(qty) || qty <= 0) {
-          setError(`Ошибка в строке ${startRow + i}: для артикула "${article}" указано некорректное количество.`);
-          setIsProcessing(false);
-          return;
-      }
-      
-      // We allow 0 price for DRAFT positions
-      if (isNaN(price) || price < 0) {
-          setError(`Ошибка в строке ${startRow + i}: для артикула "${article}" указана некорректная цена.`);
-          setIsProcessing(false);
-          return;
-      }
-
-        if (article && !isNaN(qty)) {
-          const normalizedArticle = article.toLowerCase();
-          const isCross = crossTypeRaw && crossTypeRaw.toLowerCase() !== 'реальный' && crossTypeRaw.toLowerCase() !== 'real';
-          
-          let product = localProducts.find(p => p.article.toLowerCase() === normalizedArticle);
-          
-          if (!product && onCreateMissingProduct) {
-            let parentId = undefined;
-            if (isCross) {
-              const parentArticleNormalized = crossTypeRaw.trim().toUpperCase();
-              const parent = localProducts.find(p => p.article.toUpperCase() === parentArticleNormalized);
-              if (!parent) {
-                setError(`Ошибка в строке ${startRow + i}: Родительский товар (Реальный артикул "${crossTypeRaw}") для кросса не найден в базе или в загруженном файле.`);
-                setIsProcessing(false);
-                return;
-              }
-              parentId = parent.id;
-            }
-
-            product = await onCreateMissingProduct({
-              article, 
-              brandName, 
-              productName,
-              parentId,
-              price
-            });
-
-            if (product) {
-              localProducts.push(product);
-            }
-          }
-
-          if (!product) {
-            setError(`Ошибка: товар с артикулом ${article} не найден и его не удалось создать автоматически. Проверьте данные.`);
+        if (/[А-Яа-яЁё]/.test(article)) {
+            setError(`Ошибка в строке ${startRow + i}: артикул "${article}" содержит кириллицу.`);
             setIsProcessing(false);
             return;
-          }
-
-          if (locationName) {
-            locationUpdatesMap[product.id] = locationName;
-          }
-
-          // ONLY add to document rows if it's NOT a cross (as requested by user for primary import)
-          if (!isCross && qty > 0) {
-            documentRows.push({
-              productId: product.id,
-              qty,
-              price
-            });
-            totalAmount += qty * price;
-            totalQty += qty;
-          }
         }
+
+        if (isNaN(qty) || qty <= 0) {
+            setError(`Ошибка в строке ${startRow + i}: для артикула "${article}" указано некорректное количество.`);
+            setIsProcessing(false);
+            return;
+        }
+        
+        if (isNaN(price) || price < 0) {
+            setError(`Ошибка в строке ${startRow + i}: для артикула "${article}" указана некорректная цена.`);
+            setIsProcessing(false);
+            return;
+        }
+
+        importRows.push({
+            article,
+            name: productName,
+            price,
+            brandName,
+            qty,
+            locationName,
+            originalIndex: i
+        });
     }
 
-    if (documentRows.length === 0) {
-      setError('В файле не найдено корректных данных для загрузки');
-      setIsProcessing(false);
-      return;
+    if (importRows.length === 0) {
+        setError('В файле не найдено корректных данных для загрузки');
+        setIsProcessing(false);
+        return;
+    }
+
+    // 2. Execute Chunked Import on Backend (creates products and records prices)
+    const isSuccess = await startImport(importRows);
+    
+    // 3. To build the Document we need actual product IDs. 
+    // We fetch the updated catalog from the server.
+    let updatedCatalog;
+    try {
+        const catalogRes = await api.get('/catalog');
+        updatedCatalog = catalogRes.data.data as ProductView[];
+    } catch (err) {
+        setError('Сбой синхронизации каталога после импорта товаров.');
+        setIsProcessing(false);
+        return;
+    }
+
+    // 4. Build Document rows aligning with imported data
+    for (const row of importRows) {
+        const product = updatedCatalog.find(p => p.article.toLowerCase() === row.article.toLowerCase());
+        
+        if (product) {
+            documentRowsData.push({
+                productId: product.id,
+                qty: row.qty,
+                price: row.price
+            });
+            totalAmount += row.qty * row.price;
+            totalQty += row.qty;
+            
+            if (row.locationName) {
+                locationUpdatesMap[product.id] = row.locationName;
+            }
+        }
     }
 
     const newDoc: Document = {
@@ -340,7 +340,7 @@ export default function IncomeView({ suppliers, products, documents, locations, 
       date: new Date().toISOString(),
       partnerId: selectedSupplier,
       name: documentName.trim() || undefined,
-      rows: documentRows,
+      rows: documentRowsData,
       totalAmount
     };
 
@@ -349,35 +349,34 @@ export default function IncomeView({ suppliers, products, documents, locations, 
         const updates = Object.entries(locationUpdatesMap).map(([productId, locationName]) => ({ productId, locationName }));
         await onSaveLocations(updates);
       } catch (err) {
-        setError('Обнаружена проблема при сохранении размещений товаров.');
-        setIsProcessing(false);
-        return;
+        console.error('Failed to save locations partially', err);
       }
     }
 
-    // Save config for the selected supplier
     if (onUpdateSupplierConfig) {
-      const configObj = { startRow, mapping };
-      onUpdateSupplierConfig(selectedSupplier, JSON.stringify(configObj));
+      onUpdateSupplierConfig(selectedSupplier, JSON.stringify({ startRow, mapping }));
     }
 
     const result = await onSaveDocument(newDoc);
     if (!result.success) {
-      if (result.error?.includes(', ')) {
-        setError(result.error.split(', '));
-      } else {
-        setError(`Ошибка сохранения документа: ${result.error || 'Неизвестная ошибка'}`);
-      }
+      setError(`Ошибка сохранения документа: ${result.error || 'Неизвестная ошибка'}`);
       setIsProcessing(false);
       return;
     }
 
+    // Override the metrics time to include the document saving phase safely in state
+    const endTime = performance.now();
+    const finalTotalTime = (endTime - overallStartTime) / 1000;
+    
+    setFinalImportTime(`${finalTotalTime.toFixed(2)} s`);
+
     setImportStats({
-      rows: documentRows.length,
+      rows: documentRowsData.length,
       totalQty,
       totalAmount
     });
     setDraftLocations(prev => ({ ...prev, ...locationUpdatesMap }));
+    setShowSummaryReport(true);
     setStep('upload');
     setFileName('');
     setFileData([]);
@@ -611,6 +610,13 @@ export default function IncomeView({ suppliers, products, documents, locations, 
             </button>
           </div>
 
+          {showSummaryReport && metrics && (
+             <ImportSummaryReport 
+               metrics={{ ...metrics, totalExecutionTimeSeconds: finalImportTime || metrics.totalExecutionTimeSeconds }} 
+               onRefresh={() => setShowSummaryReport(false)} 
+             />
+          )}
+
           {renderSuccessStats()}
           {renderError()}
 
@@ -794,66 +800,96 @@ export default function IncomeView({ suppliers, products, documents, locations, 
               <button 
                 onClick={() => setStep('upload')}
                 className="flex items-center gap-2 px-4 py-2 border border-slate-300 text-slate-700 hover:bg-slate-50 rounded-lg text-sm font-medium transition-colors"
+                disabled={isImporting}
               >
                 <RotateCcw className="w-4 h-4" />
                 Назад
               </button>
               <button 
                 onClick={handleConfirm}
-                disabled={isProcessing}
+                disabled={isProcessing || isImporting}
                 className="flex items-center gap-2 px-6 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors shadow-sm"
               >
                 <CheckCheck className="w-4 h-4" />
-                {isProcessing ? 'Обработка...' : 'Провести накладную'}
+                {(isProcessing || isImporting) ? 'Обработка...' : 'Провести накладную'}
               </button>
             </div>
           </div>
+          <ImportProgress 
+            isImporting={isImporting} 
+            totalCount={totalCount} 
+            processedCount={processedCount} 
+            progress={progress} 
+            errors={importErrors} 
+          />
         </div>
       )}
     </div>
   );
 }
 
-function RollbackButton({ onConfirm, title }: { onConfirm: () => void, title: string }) {
-  const [isConfirming, setIsConfirming] = React.useState(false);
+function RollbackButton({ onConfirm, title }: { onConfirm: () => Promise<void> | void, title: string }) {
+  const [isOpen, setIsOpen] = React.useState(false);
+  const [isProcessing, setIsProcessing] = React.useState(false);
 
-  if (isConfirming) {
-    return (
-      <div className="flex items-center gap-1 animate-in zoom-in-95 duration-200">
-        <button 
-          onClick={(e) => {
-            e.stopPropagation();
-            onConfirm();
-            setIsConfirming(false);
-          }}
-          className="px-2 py-1 bg-rose-600 text-white text-[10px] uppercase font-bold rounded hover:bg-rose-700 transition-colors"
-        >
-          Да
-        </button>
-        <button 
-          onClick={(e) => {
-            e.stopPropagation();
-            setIsConfirming(false);
-          }}
-          className="px-2 py-1 bg-slate-200 text-slate-700 text-[10px] uppercase font-bold rounded hover:bg-slate-300 transition-colors"
-        >
-          Нет
-        </button>
-      </div>
-    );
-  }
+  const handleConfirm = async () => {
+    setIsProcessing(true);
+    try {
+      await onConfirm();
+    } finally {
+      setIsProcessing(false);
+      setIsOpen(false);
+    }
+  };
 
   return (
-    <button 
-      onClick={(e) => {
-        e.stopPropagation();
-        setIsConfirming(true);
-      }}
-      className="p-2 text-rose-600 hover:bg-rose-50 rounded-lg transition-all border border-transparent hover:border-rose-200 active:scale-90"
-      title={title}
-    >
-      <Trash2 className="w-4 h-4" />
-    </button>
+    <>
+      <button 
+        onClick={(e) => {
+          e.stopPropagation();
+          setIsOpen(true);
+        }}
+        className="flex items-center gap-1 px-3 py-1.5 bg-rose-50 text-rose-700 hover:bg-rose-600 hover:text-white rounded-lg transition-colors border border-rose-200 text-sm font-medium shadow-sm"
+        title={title}
+      >
+        <Trash2 className="w-4 h-4" /> Откатить накладную
+      </button>
+
+      {isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
+          <div className="bg-white rounded-xl shadow-xl border border-rose-200 w-full max-w-md overflow-hidden animate-in zoom-in-95" onClick={(e) => e.stopPropagation()}>
+            <div className="p-6">
+              <div className="flex items-center gap-3 text-rose-600 mb-4">
+                <AlertCircle className="w-8 h-8 flex-shrink-0" />
+                <h3 className="text-xl font-bold">Are you sure?</h3>
+              </div>
+              <p className="text-slate-600 text-sm mb-6">
+                This will deduct the items from current stock and delete the inventory batches. This action cannot be undone.
+              </p>
+              
+              <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+                <button
+                  type="button"
+                  disabled={isProcessing}
+                  onClick={() => setIsOpen(false)}
+                  className="px-4 py-2 bg-slate-100 text-slate-700 font-medium rounded-lg hover:bg-slate-200 transition-colors disabled:opacity-50"
+                >
+                  Отмена
+                </button>
+                <button
+                  type="button"
+                  disabled={isProcessing}
+                  onClick={handleConfirm}
+                  className="px-4 py-2 bg-rose-600 text-white font-bold rounded-lg hover:bg-rose-700 transition-colors shadow-sm disabled:opacity-50"
+                >
+                  {isProcessing ? 'Удаление...' : 'Да, откатить'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 

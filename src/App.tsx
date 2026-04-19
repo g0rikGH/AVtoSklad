@@ -75,7 +75,8 @@ function Dashboard() {
     try {
       const res = await api.get('/catalog');
       setProductsView(res.data.data);
-    } catch (error) {
+    } catch (error: any) {
+      if (error.response && error.response.status === 401) return; // Silent catching for auth redirect
       console.error('Ошибка загрузки каталога:', error);
     }
   }, []);
@@ -84,16 +85,17 @@ function Dashboard() {
   const fetchReferences = React.useCallback(async () => {
     try {
       const [brandsRes, locRes, partnersRes, docsRes] = await Promise.all([
-        api.get('/catalog/brands').catch(() => ({ data: { data: [] } })),
-        api.get('/catalog/locations').catch(() => ({ data: { data: [] } })),
-        api.get('/partners').catch(() => ({ data: { data: [] } })),
-        api.get('/documents').catch(() => ({ data: { data: [] } }))
+        api.get('/catalog/brands').catch((e) => { if (e.response?.status !== 401) console.error(e); return { data: { data: [] } }; }),
+        api.get('/catalog/locations').catch((e) => { if (e.response?.status !== 401) console.error(e); return { data: { data: [] } }; }),
+        api.get('/partners').catch((e) => { if (e.response?.status !== 401) console.error(e); return { data: { data: [] } }; }),
+        api.get('/documents').catch((e) => { if (e.response?.status !== 401) console.error(e); return { data: { data: [] } }; })
       ]);
       setBrands(brandsRes.data?.data || []);
       setLocations(locRes.data?.data || []);
       setPartners(partnersRes.data?.data || []);
       setDocuments(docsRes.data?.data || []);
-    } catch (error) {
+    } catch (error: any) {
+      if (error.response && error.response.status === 401) return;
       console.error('Ошибка загрузки справочников:', error);
     }
   }, []);
