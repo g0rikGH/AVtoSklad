@@ -1,0 +1,139 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model User {
+  id           String     @id @default(uuid())
+  email        String     @unique
+  passwordHash String     @map("password_hash")
+  name         String
+  role         String     @default("MANAGER") // 'ADMIN' or 'MANAGER'
+  createdAt    DateTime   @default(now()) @map("created_at")
+  documents    Document[]
+
+  @@map("users")
+}
+
+model Partner {
+  id           String     @id @default(uuid())
+  name         String
+  type         String
+  importConfig String?
+  documents    Document[]
+
+  @@map("partners")
+}
+
+model Brand {
+  id      String    @id @default(uuid())
+  name    String
+  catalog Catalog[]
+
+  @@map("brands")
+}
+
+model Location {
+  id      String    @id @default(uuid())
+  name    String
+  catalog Catalog[]
+
+  @@map("locations")
+}
+
+model Catalog {
+  id           String             @id @default(uuid())
+  article      String
+  name         String
+  type         String
+  status       String             @default("ACTIVE")
+  brandId      String?            @map("brand_id")
+  locationId   String?            @map("location_id")
+  comment      String?
+  parentId     String?            @map("parent_id")
+  parent       Catalog?           @relation("PhantomParent", fields: [parentId], references: [id])
+  phantoms     Catalog[]          @relation("PhantomParent")
+  location     Location?          @relation(fields: [locationId], references: [id])
+  brand        Brand?             @relation(fields: [brandId], references: [id])
+  currentPrice CurrentPrice?
+  documentRows DocumentRow[]
+  stockBalance StockBalance?
+  batches      InventoryBatch[]
+
+  @@map("catalog")
+}
+
+model InventoryBatch {
+  id                String             @id @default(uuid())
+  productId         String             @map("product_id")
+  documentRowId     String?            @map("document_row_id") // Link to the income doc row
+  originalQuantity  Int                @map("original_qty")
+  remainingQuantity Int                @map("remaining_qty")
+  purchasePrice     Float              @map("purchase_price")
+  createdAt         DateTime           @default(now()) @map("created_at")
+  product           Catalog            @relation(fields: [productId], references: [id])
+  transactions      BatchTransaction[]
+
+  @@map("inventory_batches")
+}
+
+model BatchTransaction {
+  id             String      @id @default(uuid())
+  documentRowId  String      @map("document_row_id") // The expense row
+  batchId        String      @map("batch_id")
+  qty            Int
+  batch          InventoryBatch @relation(fields: [batchId], references: [id])
+  documentRow    DocumentRow    @relation(fields: [documentRowId], references: [id], onDelete: Cascade)
+
+  @@map("batch_transactions")
+}
+
+model StockBalance {
+  productId String  @id @map("product_id")
+  qty       Int     @default(0)
+  product   Catalog @relation(fields: [productId], references: [id])
+
+  @@map("stock_balances")
+}
+
+model CurrentPrice {
+  productId     String  @id @map("product_id")
+  purchasePrice Float   @default(0) @map("purchase_price")
+  sellingPrice  Float   @default(0) @map("selling_price")
+  product       Catalog @relation(fields: [productId], references: [id])
+
+  @@map("current_prices")
+}
+
+model Document {
+  id          String        @id @default(uuid())
+  type        String
+  date        DateTime      @default(now()) @map("doc_date")
+  partnerId   String        @map("partner_id")
+  totalAmount Float         @map("total_amount")
+  userId      String        @map("user_id")
+  name        String?
+  number      Int?
+  rows        DocumentRow[]
+  user        User          @relation(fields: [userId], references: [id])
+  partner     Partner       @relation(fields: [partnerId], references: [id])
+
+  @@map("documents")
+}
+
+model DocumentRow {
+  id                String             @id @default(uuid())
+  documentId        String             @map("document_id")
+  productId         String             @map("product_id")
+  qty               Int
+  price             Float
+  product           Catalog            @relation(fields: [productId], references: [id])
+  document          Document           @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  batchTransactions BatchTransaction[]
+
+  @@map("document_rows")
+}
