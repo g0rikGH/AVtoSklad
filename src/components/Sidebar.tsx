@@ -76,6 +76,9 @@ const Sidebar = forwardRef<HTMLElement, SidebarProps>(({ activeTab, onTabChange,
               <LogOut className="w-4 h-4" />
            </button>
         </div>
+        <div className="px-4 mt-3 text-left">
+          <span className="text-[10px] text-slate-500 font-mono font-medium">v1.0</span>
+        </div>
       </div>
     </nav>
   );
