@@ -119,7 +119,7 @@ export class DocumentsService {
         data: { status: 'COMPLETED', totalAmount },
         include: { rows: true }
       });
-    }, { timeout: 30000 });
+    }, { timeout: 300000 });
   }
 
   async deleteDraft(id: string) {
@@ -145,7 +145,7 @@ export class DocumentsService {
            await tx.catalog.delete({ where: { id: pId } });
         }
       }
-    }, { timeout: 30000 });
+    }, { timeout: 300000 });
   }
 
   async createDocument(dto: CreateDocumentDto, userId: string) {
@@ -406,7 +406,7 @@ export class DocumentsService {
 
         console.log(`[BACKEND-ROLLBACK] Rollback COMPLETED for: ${id}`);
         return { success: true };
-      }, { timeout: 30000 });
+      }, { timeout: 300000 });
     } catch (error: any) {
       console.error(`[BACKEND-ROLLBACK] CRITICAL ERROR for ${id}:`, error);
       throw error;

@@ -111,7 +111,7 @@ export class ImportController {
             });
           }
         }
-      }, { timeout: 15000 });
+      }, { timeout: 300000 });
 
     } catch (error: any) {
       console.error("Bulk import failed:", error);
