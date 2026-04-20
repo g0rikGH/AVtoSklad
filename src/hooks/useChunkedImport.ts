@@ -26,7 +26,7 @@ export function useChunkedImport() {
   const [errors, setErrors] = useState<{ identifier: string; reason: string }[]>([]);
   const [metrics, setMetrics] = useState<ImportMetrics | null>(null);
 
-  const startImport = useCallback(async (rows: ImportRow[]) => {
+  const startImport = useCallback(async (rows: ImportRow[], documentId: string, isInitialBalance: boolean = false) => {
     setIsImporting(true);
     setTotalCount(rows.length);
     setProcessedCount(0);
@@ -53,7 +53,7 @@ export function useChunkedImport() {
 
     try {
       for (const chunk of chunks) {
-        const response = await api.post('/import/chunk', { items: chunk });
+        const response = await api.post('/import/chunk', { items: chunk, documentId, isInitialBalance });
         const { errors: chunkErrors = [], insertedCount = 0, updatedCount = 0, newBrandsCount = 0 } = response.data;
         
         totalInserted += insertedCount;

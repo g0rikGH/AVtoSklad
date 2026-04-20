@@ -30,6 +30,7 @@ export default function IncomeView({ suppliers, products, documents, locations, 
   const [step, setStep] = useState<Step>('upload');
   const [selectedSupplier, setSelectedSupplier] = useState('');
   const [documentName, setDocumentName] = useState('');
+  const [isInitialBalance, setIsInitialBalance] = useState(false);
   const [fileName, setFileName] = useState('');
   const [fileData, setFileData] = useState<any[][]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -98,6 +99,20 @@ export default function IncomeView({ suppliers, products, documents, locations, 
     );
   };
 
+  const [failedDraftId, setFailedDraftId] = useState<string | null>(null);
+
+  const handleCancelDraft = async () => {
+    if (!failedDraftId) return;
+    try {
+      await api.delete(`/documents/${failedDraftId}/draft`);
+      setFailedDraftId(null);
+      setError(null);
+      alert('Черновик и связанные с ним зависшие данные были успешно удалены.');
+    } catch (err) {
+      alert('Ошибка при удалении черновика.');
+    }
+  };
+
   const renderError = () => {
     if (!error) return null;
     const errorList = Array.isArray(error) ? error : error.split(', ');
@@ -108,13 +123,21 @@ export default function IncomeView({ suppliers, products, documents, locations, 
         <div className="flex-1">
           <h4 className="text-sm font-bold mb-1">Ошибка импорта</h4>
           {errorList.length === 1 ? (
-            <p className="text-sm font-medium">{errorList[0]}</p>
+            <p className="text-sm font-medium mb-3">{errorList[0]}</p>
           ) : (
-            <ul className="list-disc pl-4 text-sm font-medium space-y-1">
+            <ul className="list-disc pl-4 text-sm font-medium space-y-1 mb-3">
               {errorList.map((err, i) => (
                 <li key={i}>{err}</li>
               ))}
             </ul>
+          )}
+          {failedDraftId && (
+            <button 
+              onClick={handleCancelDraft}
+              className="mt-2 text-white bg-rose-600 hover:bg-rose-700 font-semibold py-1.5 px-4 rounded shadow-sm text-sm transition-colors flex items-center gap-2"
+            >
+              <Trash2 className="w-4 h-4" /> Отменить импорт и удалить мусор
+            </button>
           )}
         </div>
         <button onClick={() => setError(null)} className="ml-auto p-1 hover:bg-rose-100 rounded-md transition-colors">
@@ -196,7 +219,25 @@ export default function IncomeView({ suppliers, products, documents, locations, 
         const wsname = wb.SheetNames[0];
         const ws = wb.Sheets[wsname];
         const data = XLSX.utils.sheet_to_json(ws, { header: 1 }) as any[][];
-        setFileData(data);
+        
+        // Filtering step: remove completely empty rows or rows where Column A is empty
+        const filteredData = data.filter((row: any[]) => {
+          if (!row || row.length === 0) return false;
+          
+          // Must have at least one non-empty cell
+          const hasValues = row.some(cell => cell !== null && cell !== undefined && String(cell).trim() !== '');
+          if (!hasValues) return false;
+
+          // More reliably: discard if Column A (first column) is completely empty
+          const colA = row[0];
+          if (colA === null || colA === undefined || String(colA).trim() === '') {
+            return false;
+          }
+
+          return true;
+        });
+
+        setFileData(filteredData);
       };
       reader.readAsBinaryString(file);
     }
@@ -300,68 +341,41 @@ export default function IncomeView({ suppliers, products, documents, locations, 
         return;
     }
 
-    // 2. Execute Chunked Import on Backend (creates products and records prices)
-    const isSuccess = await startImport(importRows);
-    
-    // 3. To build the Document we need actual product IDs. 
-    // We fetch the updated catalog from the server.
-    let updatedCatalog;
+    // --- DRAFT ARCHITECTURE ---
+    let draftId = '';
     try {
-        const catalogRes = await api.get('/catalog');
-        updatedCatalog = catalogRes.data.data as ProductView[];
-    } catch (err) {
-        setError('Сбой синхронизации каталога после импорта товаров.');
+        const draftRes = await api.post('/documents/draft', {
+            type: 'INCOME',
+            partnerId: selectedSupplier,
+            name: documentName.trim() || undefined
+        });
+        draftId = draftRes.data.data.id;
+    } catch (err: any) {
+        setError('Не удалось создать черновик: ' + (err.response?.data?.message || err.message));
         setIsProcessing(false);
         return;
     }
 
-    // 4. Build Document rows aligning with imported data
-    for (const row of importRows) {
-        const product = updatedCatalog.find(p => p.article.toLowerCase() === row.article.toLowerCase());
-        
-        if (product) {
-            documentRowsData.push({
-                productId: product.id,
-                qty: row.qty,
-                price: row.price
-            });
-            totalAmount += row.qty * row.price;
-            totalQty += row.qty;
-            
-            if (row.locationName) {
-                locationUpdatesMap[product.id] = row.locationName;
-            }
-        }
+    // 2. Execute Chunked Import on Backend (creates products and document rows)
+    const isSuccess = await startImport(importRows, draftId, isInitialBalance);
+    
+    if (!isSuccess) {
+       setFailedDraftId(draftId);
+       setError('Во время импорта произошли ошибки. Вы можете отменить импорт и удалить черновик накладной, чтобы не мусорить в базе.');
+       setIsProcessing(false);
+       return;
     }
 
-    const newDoc: Document = {
-      id: `doc_${Date.now()}`,
-      type: 'income',
-      date: new Date().toISOString(),
-      partnerId: selectedSupplier,
-      name: documentName.trim() || undefined,
-      rows: documentRowsData,
-      totalAmount
-    };
-
-    if (Object.keys(locationUpdatesMap).length > 0 && onSaveLocations) {
-      try {
-        const updates = Object.entries(locationUpdatesMap).map(([productId, locationName]) => ({ productId, locationName }));
-        await onSaveLocations(updates);
-      } catch (err) {
-        console.error('Failed to save locations partially', err);
-      }
-    }
-
-    if (onUpdateSupplierConfig) {
-      onUpdateSupplierConfig(selectedSupplier, JSON.stringify({ startRow, mapping }));
-    }
-
-    const result = await onSaveDocument(newDoc);
-    if (!result.success) {
-      setError(`Ошибка сохранения документа: ${result.error || 'Неизвестная ошибка'}`);
-      setIsProcessing(false);
-      return;
+    // 3. Commit Document
+    let commitResult;
+    try {
+       const commitRes = await api.post(`/documents/${draftId}/commit`, { isInitialBalance });
+       commitResult = commitRes.data.data;
+    } catch (err: any) {
+       setFailedDraftId(draftId);
+       setError('Ошибка проведения документа: ' + (err.response?.data?.message || err.message));
+       setIsProcessing(false);
+       return;
     }
 
     // Override the metrics time to include the document saving phase safely in state
@@ -370,12 +384,19 @@ export default function IncomeView({ suppliers, products, documents, locations, 
     
     setFinalImportTime(`${finalTotalTime.toFixed(2)} s`);
 
+    // Calculate sum correctly from import rows for UI mapping
+    totalQty = 0;
+    totalAmount = 0;
+    for (const r of importRows) {
+        totalQty += r.qty;
+        totalAmount += (r.qty * r.price);
+    }
+
     setImportStats({
-      rows: documentRowsData.length,
+      rows: importRows.length,
       totalQty,
       totalAmount
     });
-    setDraftLocations(prev => ({ ...prev, ...locationUpdatesMap }));
     setShowSummaryReport(true);
     setStep('upload');
     setFileName('');
@@ -679,6 +700,23 @@ export default function IncomeView({ suppliers, products, documents, locations, 
               onChange={(e) => setDocumentName(e.target.value)}
               className="w-full max-w-md px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
+          </div>
+
+          <div className="mb-6">
+            <label className="flex items-start gap-3 cursor-pointer p-4 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition-colors max-w-xl">
+              <input 
+                type="checkbox" 
+                checked={isInitialBalance}
+                onChange={(e) => setIsInitialBalance(e.target.checked)}
+                className="mt-1 w-5 h-5 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+              />
+              <div>
+                <div className="font-semibold text-amber-900">Ввод начальных остатков</div>
+                <div className="text-sm text-amber-700 mt-1">
+                  Закупочная цена будет установлена как 0 ₽. Розничная цена будет взята из файла. Партии будут помечены для будущей корректировки себестоимости.
+                </div>
+              </div>
+            </label>
           </div>
 
           <div className="flex items-center gap-4">

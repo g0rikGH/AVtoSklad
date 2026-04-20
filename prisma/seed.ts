@@ -24,40 +24,12 @@ async function main() {
     where: { id: '00000000-0000-0000-0000-000000000000' }, // Фейковый UUID для обхода
     update: {},
     create: {
+      id: '00000000-0000-0000-0000-000000000000',
       name: 'Системная корректировка (Инвентаризация)',
       type: 'SUPPLIER',
     },
   });
   console.log('✅ Системный контрагент создан:', systemPartner.name);
-
-  const defaultBrand = await prisma.brand.create({
-    data: { name: 'Toyota' }
-  });
-
-  const defaultLoc = await prisma.location.create({
-    data: { name: 'Стеллаж A1' }
-  });
-
-  const testProduct = await prisma.catalog.create({
-    data: {
-      article: '111-TEST',
-      name: 'Кассета ВВБ Prius',
-      type: 'REAL',
-      brandId: defaultBrand.id,
-      locationId: defaultLoc.id
-    }
-  });
-
-  console.log('✅ Тестовый товар: ', testProduct.name);
-
-  // Дадим немного остатка
-  await prisma.stockBalance.create({
-    data: { productId: testProduct.id, qty: 10 }
-  });
-
-  await prisma.currentPrice.create({
-    data: { productId: testProduct.id, purchasePrice: 50, sellingPrice: 100 }
-  });
 
 }
 

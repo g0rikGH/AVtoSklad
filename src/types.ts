@@ -1,4 +1,4 @@
-export type TabId = 'stock' | 'income' | 'expense' | 'reports' | 'price' | 'users';
+export type TabId = 'stock' | 'income' | 'expense' | 'reports' | 'price' | 'users' | 'correction';
 
 export type UserRole = 'ADMIN' | 'MANAGER';
 
@@ -70,6 +70,7 @@ export interface Document {
   partnerId: string;
   rows: DocumentRow[];
   totalAmount: number;
+  isInitialBalance?: boolean;
 }
 
 // Helper type for the UI (Joined View)

@@ -10,12 +10,14 @@ interface PriceViewProps {
 
 export default function PriceView({ products }: PriceViewProps) {
   const [filter, setFilter] = useState<'all' | 'in_stock'>('all');
+  const [onlyWithPrice, setOnlyWithPrice] = useState(true);
   const [copiedLink, setCopiedLink] = useState(false);
 
   const groupedRows = useGroupedProducts(products, '').filter(p => (p as any).status !== 'draft');
 
   const filteredProducts = groupedRows.filter(p => {
-    if (filter === 'in_stock') return p.qty > 0;
+    if (filter === 'in_stock' && p.qty <= 0) return false;
+    if (onlyWithPrice && (!p.sellingPrice || p.sellingPrice <= 0)) return false;
     return true;
   });
 
@@ -72,7 +74,7 @@ export default function PriceView({ products }: PriceViewProps) {
     XLSX.writeFile(workbook, `price_list_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
-  const staticLink = `${window.location.origin}/api/v1/export/price-list`;
+  const staticLink = `${window.location.origin}/api/v1/export/price-list?onlyWithPrice=${onlyWithPrice}`;
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(staticLink);
@@ -131,6 +133,21 @@ export default function PriceView({ products }: PriceViewProps) {
           </button>
         </div>
 
+        <div className="mb-8">
+          <label className="flex items-center gap-3 cursor-pointer p-4 bg-slate-50 border border-slate-200 rounded-xl hover:bg-slate-100 transition-colors">
+            <input 
+              type="checkbox" 
+              checked={onlyWithPrice}
+              onChange={(e) => setOnlyWithPrice(e.target.checked)}
+              className="w-5 h-5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+            />
+            <div>
+              <div className="font-semibold text-slate-800">Только товары с установленной ценой</div>
+              <div className="text-sm text-slate-500">Исключить позиции с нулевой ценой (защита от бесплатных заказов)</div>
+            </div>
+          </label>
+        </div>
+
         <div className="bg-slate-50 rounded-lg p-4 mb-8 border border-slate-200 flex items-center justify-between">
           <div className="text-slate-600">
             Будет выгружено позиций: <strong className="text-slate-900 text-lg ml-2">{filteredProducts.length}</strong>
@@ -161,7 +178,7 @@ export default function PriceView({ products }: PriceViewProps) {
             Постоянная ссылка на API
           </h4>
           <p className="text-sm text-blue-800/80 mb-4">
-            Эта ссылка всегда возвращает актуальный прайс-лист по <b>всем товарам</b> в формате Excel. Вы можете отдать её покупателям для автоматической загрузки роботом.
+            Эта ссылка всегда возвращает актуальный прайс-лист в формате Excel с учётом ваших настроек фильтрации цены. Вы можете отдать её покупателям для автоматической загрузки роботом.
           </p>
           <div className="flex items-center gap-2">
             <div className="bg-white px-4 py-2.5 rounded-lg border border-blue-200 font-mono text-xs text-slate-600 flex-1 overflow-x-auto whitespace-nowrap scrollbar-hide">

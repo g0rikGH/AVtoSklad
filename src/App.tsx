@@ -6,6 +6,7 @@ import ExpenseView from './components/ExpenseView';
 import ReportsView from './components/ReportsView';
 import PriceView from './components/PriceView';
 import ProductModal from './components/ProductModal';
+import CostCorrectionQueue from './components/CostCorrectionQueue';
 import { UserManagement } from './pages/UserManagement';
 import { TabId, Partner, Document, ProductView, Brand, Location } from './types';
 import api from './api/axios';
@@ -66,6 +67,7 @@ function Dashboard() {
     reports: 'bg-fuchsia-50/50',
     price: 'bg-amber-50/50',
     users: 'bg-slate-100',
+    correction: 'bg-orange-50/50',
   };
 
   const [isSaving, setIsSaving] = useState(false);
@@ -243,6 +245,7 @@ function Dashboard() {
         type: doc.type.toUpperCase(), // 'income' | 'expense' -> 'INCOME' | 'EXPENSE'
         partnerId: doc.partnerId,
         totalAmount: doc.totalAmount,
+        isInitialBalance: doc.isInitialBalance,
         rows: doc.rows.map(row => ({
           productId: row.productId,
           qty: row.qty,
@@ -487,6 +490,8 @@ function Dashboard() {
           {activeTab === 'price' && <PriceView products={productsView} />}
 
           {activeTab === 'users' && <UserManagement />}
+          
+          {activeTab === 'correction' && <CostCorrectionQueue />}
         </div>
       </main>
 

@@ -68,15 +68,16 @@ model Catalog {
 }
 
 model InventoryBatch {
-  id                String             @id @default(uuid())
-  productId         String             @map("product_id")
-  documentRowId     String?            @map("document_row_id") // Link to the income doc row
-  originalQuantity  Int                @map("original_qty")
-  remainingQuantity Int                @map("remaining_qty")
-  purchasePrice     Float              @map("purchase_price")
-  createdAt         DateTime           @default(now()) @map("created_at")
-  product           Catalog            @relation(fields: [productId], references: [id])
-  transactions      BatchTransaction[]
+  id                  String             @id @default(uuid())
+  productId           String             @map("product_id")
+  documentRowId       String?            @map("document_row_id") // Link to the income doc row
+  originalQuantity    Int                @map("original_qty")
+  remainingQuantity   Int                @map("remaining_qty")
+  purchasePrice       Float              @map("purchase_price")
+  needsCostCorrection Boolean            @default(false) @map("needs_cost_correction")
+  createdAt           DateTime           @default(now()) @map("created_at")
+  product             Catalog            @relation(fields: [productId], references: [id])
+  transactions        BatchTransaction[]
 
   @@map("inventory_batches")
 }
@@ -118,6 +119,7 @@ model Document {
   userId      String        @map("user_id")
   name        String?
   number      Int?
+  status      String        @default("COMPLETED")
   rows        DocumentRow[]
   user        User          @relation(fields: [userId], references: [id])
   partner     Partner       @relation(fields: [partnerId], references: [id])

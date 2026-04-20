@@ -6,8 +6,18 @@ import { CreateReferenceDto, CreateProductDto } from './dto/create-catalog.dto';
 export class CatalogService {
   constructor(@Inject(PrismaService) private prisma: PrismaService) {}
 
-  async getAllProductsView() {
+  async getAllProductsView(onlyWithPrice: boolean = false) {
+    const whereCondition: any = {};
+    
+    if (onlyWithPrice) {
+      whereCondition.currentPrice = {
+        isNot: null,
+        sellingPrice: { gt: 0 }
+      };
+    }
+
     const products = await this.prisma.catalog.findMany({
+      where: whereCondition,
       include: {
         brand: true,
         location: true,

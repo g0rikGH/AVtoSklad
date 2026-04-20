@@ -22,6 +22,7 @@ export class CreateDocumentDto {
   partnerId: string;
 
   name?: string;
+  isInitialBalance?: boolean;
 
   @IsNumber()
   @Min(0, { message: 'totalAmount не может быть отрицательной суммой' })

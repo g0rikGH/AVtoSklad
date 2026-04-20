@@ -7,6 +7,7 @@ import {
   FileSpreadsheet,
   CarFront,
   ShieldAlert,
+  AlertCircle,
   LogOut
 } from 'lucide-react';
 import { TabId } from '../types';
@@ -21,12 +22,13 @@ interface SidebarProps {
 const Sidebar = forwardRef<HTMLElement, SidebarProps>(({ activeTab, onTabChange, width }, ref) => {
   const { user, logout } = useAuth();
   
-  const navItems: { id: TabId; label: string; icon: React.ElementType }[] = [
+  const navItems: { id: TabId; label: string; icon: React.ElementType; color?: string }[] = [
     { id: 'stock', label: 'Остатки на складе', icon: PackageSearch },
     { id: 'income', label: 'Приход товара', icon: ArrowRightToLine },
     { id: 'expense', label: 'Списание / Расход', icon: FileMinus2 },
     { id: 'reports', label: 'Отчеты', icon: PieChart },
     { id: 'price', label: 'Прайс-лист', icon: FileSpreadsheet },
+    { id: 'correction', label: 'Корректировка цен', icon: AlertCircle, color: 'text-orange-400' },
   ];
 
   if (user?.role === 'ADMIN') {
@@ -55,7 +57,7 @@ const Sidebar = forwardRef<HTMLElement, SidebarProps>(({ activeTab, onTabChange,
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-none transition-colors duration-200 whitespace-nowrap overflow-hidden ${
                   isActive 
                     ? 'bg-slate-800 text-white font-bold tracking-wide border-l-2 border-white' 
-                    : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200 border-l-2 border-transparent font-medium'
+                    : `${item.color || 'text-slate-400'} hover:bg-slate-800 hover:text-slate-200 border-l-2 border-transparent font-medium`
                 }`}
               >
                 <Icon className="w-5 h-5 flex-shrink-0" />

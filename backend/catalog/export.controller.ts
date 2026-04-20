@@ -1,4 +1,4 @@
-import { Controller, Get, Res, Inject } from '@nestjs/common';
+import { Controller, Get, Res, Query, Inject } from '@nestjs/common';
 import { CatalogService } from './catalog.service';
 import type { Response } from 'express';
 import * as XLSX from 'xlsx';
@@ -8,8 +8,12 @@ export class ExportController {
   constructor(@Inject(CatalogService) private readonly catalogService: CatalogService) {}
 
   @Get('price-list')
-  async downloadPriceList(@Res() res: Response) {
-    const allProducts = await this.catalogService.getAllProductsView();
+  async downloadPriceList(
+    @Query('onlyWithPrice') onlyWithPriceStr: string,
+    @Res() res: Response
+  ) {
+    const onlyWithPrice = onlyWithPriceStr === 'true';
+    const allProducts = await this.catalogService.getAllProductsView(onlyWithPrice);
     const products = allProducts.filter(p => p.status !== 'draft');
     
     // Group products (parents followed by their phantoms)

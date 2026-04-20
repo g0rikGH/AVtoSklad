@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { ProductView } from '../types';
-import { Search, RefreshCw, MapPin, CornerDownRight, Ghost, CheckSquare, Square, Rocket, Loader2 } from 'lucide-react';
+import { Search, RefreshCw, MapPin, CornerDownRight, Ghost, CheckSquare, Square, Rocket, Loader2, Save } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useGroupedProducts } from '../hooks/useGroupedProducts';
 import api from '../api/axios';
@@ -378,35 +378,46 @@ export default function StockView({ products, onOpenProduct, onRefresh }: StockV
                       {p.name}
                     </td>
                     <td className="px-4 py-3 text-slate-600 font-medium truncate" style={{ width: colWidths.purchasePrice, flexShrink: 0 }}>{p.purchasePrice} ₽</td>
-                    <td className="px-4 py-3 truncate" style={{ width: colWidths.sellingPrice, flexShrink: 0 }}>
-                      {(p as any).status === 'draft' ? (
+                    <td 
+                      className="px-4 py-3 truncate" 
+                      style={{ width: colWidths.sellingPrice, flexShrink: 0 }}
+                      onDoubleClick={() => setEditingPriceId(p.id)}
+                    >
+                      {editingPriceId === p.id ? (
                         <div className="flex items-center gap-1 group/price">
-                          {editingPriceId === p.id ? (
-                            <input
-                              type="number"
-                              className="w-full px-2 py-1 text-sm font-bold border border-blue-500 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
-                              defaultValue={p.sellingPrice}
-                              autoFocus
-                              onBlur={(e) => handlePriceUpdate(p.id, parseFloat(e.target.value) || 0)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  handlePriceUpdate(p.id, parseFloat((e.target as HTMLInputElement).value) || 0);
-                                } else if (e.key === 'Escape') {
-                                  setEditingPriceId(null);
-                                }
-                              }}
-                            />
-                          ) : (
-                            <button 
-                              onClick={() => setEditingPriceId(p.id)}
-                              className="w-full text-left px-2 py-1 rounded border border-transparent hover:border-blue-300 hover:bg-white text-slate-900 font-bold transition-all"
-                            >
-                              {p.sellingPrice} ₽
-                            </button>
-                          )}
+                          <input
+                            type="number"
+                            id={`price-input-${p.id}`}
+                            className="w-full min-w-[70px] px-2 py-1.5 text-sm font-bold border border-blue-500 rounded focus:border-blue-500 focus:ring-1 focus:ring-blue-500 bg-white"
+                            defaultValue={p.sellingPrice}
+                            autoFocus
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                handlePriceUpdate(p.id, parseFloat((e.target as HTMLInputElement).value) || 0);
+                              } else if (e.key === 'Escape') {
+                                setEditingPriceId(null);
+                              }
+                            }}
+                          />
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const input = document.getElementById(`price-input-${p.id}`) as HTMLInputElement;
+                              if (input) handlePriceUpdate(p.id, parseFloat(input.value) || 0);
+                            }}
+                            className="p-1.5 text-blue-600 bg-blue-50 hover:bg-blue-600 hover:text-white rounded transition-colors shrink-0"
+                            title="Сохранить цену"
+                          >
+                            <Save className="w-4 h-4" />
+                          </button>
                         </div>
                       ) : (
-                        <span className="text-slate-900 font-bold px-2">{p.sellingPrice} ₽</span>
+                        <div 
+                          className="text-slate-900 font-bold px-2 py-1.5 cursor-text border border-transparent hover:border-slate-300 hover:bg-slate-50 rounded block w-full text-left transition-colors"
+                          title="Двойной клик для редактирования"
+                        >
+                          {p.sellingPrice} ₽
+                        </div>
                       )}
                     </td>
                     <td className="px-4 py-3 overflow-hidden" style={{ width: colWidths.location, flexShrink: 0 }}>

@@ -6,6 +6,148 @@ import { CreateDocumentDto } from './dto/create-document.dto';
 export class DocumentsService {
   constructor(@Inject(PrismaService) private prisma: PrismaService) {}
 
+  async createDraft(type: string, partnerId: string, userId: string, name?: string) {
+    const lastDoc = await this.prisma.document.findFirst({
+      where: { type },
+      orderBy: { number: 'desc' }
+    });
+    
+    return await this.prisma.document.create({
+      data: {
+        type,
+        number: (lastDoc?.number || 0) + 1,
+        partnerId,
+        userId,
+        name,
+        status: 'DRAFT',
+        totalAmount: 0
+      }
+    });
+  }
+
+  async commitDraft(id: string, isInitialBalance?: boolean) {
+    return await this.prisma.$transaction(async (tx) => {
+      const doc = await tx.document.findUnique({
+        where: { id },
+        include: { rows: true }
+      });
+      if (!doc || doc.status === 'COMPLETED') throw new BadRequestException('Invalid draft');
+
+      const totalAmount = doc.rows.reduce((sum, row) => sum + (row.qty * row.price), 0);
+      
+      const productIds = doc.rows.map(r => r.productId);
+      const productsInfo = await tx.catalog.findMany({
+        where: { id: { in: productIds } },
+        select: { id: true, type: true, parentId: true }
+      });
+      const productMap = new Map(productsInfo.map(p => [p.id, p]));
+
+      if (doc.type === 'INCOME') {
+        for (const row of doc.rows) {
+          const pInfo = productMap.get(row.productId);
+          const physicalId = pInfo?.type === 'PHANTOM' && pInfo.parentId ? pInfo.parentId : row.productId;
+
+          await tx.inventoryBatch.create({
+            data: {
+              productId: physicalId,
+              documentRowId: row.id,
+              originalQuantity: row.qty,
+              remainingQuantity: row.qty,
+              purchasePrice: isInitialBalance ? 0 : row.price,
+              needsCostCorrection: !!isInitialBalance
+            }
+          });
+
+          await tx.stockBalance.upsert({
+            where: { productId: physicalId },
+            create: { productId: physicalId, qty: row.qty },
+            update: { qty: { increment: row.qty } },
+          });
+
+          const pPrice = isInitialBalance ? 0 : row.price;
+          const sPrice = isInitialBalance ? row.price : 0;
+          
+          await tx.currentPrice.upsert({
+            where: { productId: row.productId },
+            create: { productId: row.productId, purchasePrice: pPrice, sellingPrice: sPrice },
+            update: isInitialBalance ? { purchasePrice: pPrice, sellingPrice: sPrice } : { purchasePrice: pPrice }
+          });
+        }
+      } else if (doc.type === 'EXPENSE') {
+        for (const row of doc.rows) {
+          const pInfo = productMap.get(row.productId);
+          const physicalId = pInfo?.type === 'PHANTOM' && pInfo.parentId ? pInfo.parentId : row.productId;
+
+          let neededQty = row.qty;
+          const activeBatches = await tx.inventoryBatch.findMany({
+            where: { productId: physicalId, remainingQuantity: { gt: 0 } },
+            orderBy: { createdAt: 'asc' }
+          });
+
+          const totalAvailable = activeBatches.reduce((sum, b) => sum + b.remainingQuantity, 0);
+          if (totalAvailable < neededQty) {
+            throw new BadRequestException(`Недостаточно товара ${row.productId} на складе. В наличии: ${totalAvailable}`);
+          }
+
+          for (const batch of activeBatches) {
+            if (neededQty <= 0) break;
+            const canTake = Math.min(batch.remainingQuantity, neededQty);
+            await tx.batchTransaction.create({
+              data: { documentRowId: row.id, batchId: batch.id, qty: canTake }
+            });
+            await tx.inventoryBatch.update({
+              where: { id: batch.id },
+              data: { remainingQuantity: { decrement: canTake } }
+            });
+            neededQty -= canTake;
+          }
+
+          await tx.stockBalance.update({
+            where: { productId: physicalId },
+            data: { qty: { decrement: row.qty } }
+          });
+        }
+      }
+
+      await tx.catalog.updateMany({
+        where: { id: { in: productIds }, status: 'DRAFT' },
+        data: { status: 'ACTIVE' }
+      });
+
+      return await tx.document.update({
+        where: { id },
+        data: { status: 'COMPLETED', totalAmount },
+        include: { rows: true }
+      });
+    }, { timeout: 30000 });
+  }
+
+  async deleteDraft(id: string) {
+    return await this.prisma.$transaction(async (tx) => {
+      const doc = await tx.document.findUnique({
+        where: { id },
+        include: { rows: true }
+      });
+      if (!doc || doc.status !== 'DRAFT') return;
+
+      const productIds = doc.rows.map(r => r.productId);
+      
+      await tx.documentRow.deleteMany({ where: { documentId: id } });
+      await tx.document.delete({ where: { id } });
+
+      // Clean up phantoms
+      for (const pId of productIds) {
+        const remainingRows = await tx.documentRow.count({ where: { productId: pId } });
+        const stock = await tx.stockBalance.findUnique({ where: { productId: pId } });
+        if (remainingRows === 0 && (!stock || stock.qty === 0)) {
+           await tx.stockBalance.deleteMany({ where: { productId: pId } });
+           await tx.currentPrice.deleteMany({ where: { productId: pId } });
+           await tx.catalog.delete({ where: { id: pId } });
+        }
+      }
+    }, { timeout: 30000 });
+  }
+
   async createDocument(dto: CreateDocumentDto, userId: string) {
     try {
       return await this.prisma.$transaction(async (tx) => {
@@ -55,7 +197,8 @@ export class DocumentsService {
                 documentRowId: row.id,
                 originalQuantity: row.qty,
                 remainingQuantity: row.qty,
-                purchasePrice: row.price
+                purchasePrice: dto.isInitialBalance ? 0 : row.price,
+                needsCostCorrection: !!dto.isInitialBalance
               }
             });
 
@@ -66,11 +209,14 @@ export class DocumentsService {
               update: { qty: { increment: row.qty } },
             });
 
-            // 3. Update Last Purchase Price Cache
+            // 3. Update Last Purchase Price Cache (and sellingPrice if initial balance)
+            const pPrice = dto.isInitialBalance ? 0 : row.price;
+            const sPrice = dto.isInitialBalance ? row.price : 0;
+            
             await tx.currentPrice.upsert({
               where: { productId: row.productId },
-              create: { productId: row.productId, purchasePrice: row.price, sellingPrice: 0 },
-              update: { purchasePrice: row.price }
+              create: { productId: row.productId, purchasePrice: pPrice, sellingPrice: sPrice },
+              update: dto.isInitialBalance ? { purchasePrice: pPrice, sellingPrice: sPrice } : { purchasePrice: pPrice }
             });
           }
         } else if (dto.type === 'EXPENSE') {
@@ -260,7 +406,7 @@ export class DocumentsService {
 
         console.log(`[BACKEND-ROLLBACK] Rollback COMPLETED for: ${id}`);
         return { success: true };
-      });
+      }, { timeout: 30000 });
     } catch (error: any) {
       console.error(`[BACKEND-ROLLBACK] CRITICAL ERROR for ${id}:`, error);
       throw error;

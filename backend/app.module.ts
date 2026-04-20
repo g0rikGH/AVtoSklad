@@ -6,6 +6,7 @@ import { DocumentsModule } from './documents/documents.module';
 import { PartnersModule } from './partners/partners.module';
 import { UsersModule } from './users/users.module';
 import { ImportModule } from './import/import.module';
+import { BatchesModule } from './batches/batches.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { ImportModule } from './import/import.module';
     DocumentsModule,
     PartnersModule,
     ImportModule,
+    BatchesModule,
   ],
 })
 export class AppModule {}
