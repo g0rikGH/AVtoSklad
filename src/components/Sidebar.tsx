@@ -79,7 +79,7 @@ const Sidebar = forwardRef<HTMLElement, SidebarProps>(({ activeTab, onTabChange,
            </button>
         </div>
         <div className="px-4 mt-3 text-left">
-          <span className="text-[10px] text-slate-500 font-mono font-medium">v1.0</span>
+          <span className="text-[10px] text-slate-500 font-mono font-medium">v1.1</span>
         </div>
       </div>
     </nav>

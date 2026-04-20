@@ -109,10 +109,24 @@ export class DocumentsService {
         }
       }
 
-      await tx.catalog.updateMany({
-        where: { id: { in: productIds }, status: 'DRAFT' },
-        data: { status: 'ACTIVE' }
+      const validProductsToActivate = await tx.catalog.findMany({
+        where: {
+          id: { in: productIds },
+          status: 'DRAFT',
+          currentPrice: {
+            sellingPrice: { gt: 0 }
+          }
+        },
+        select: { id: true }
       });
+
+      const validIds = validProductsToActivate.map(p => p.id);
+      if (validIds.length > 0) {
+        await tx.catalog.updateMany({
+          where: { id: { in: validIds }, status: 'DRAFT' },
+          data: { status: 'ACTIVE' }
+        });
+      }
 
       return await tx.document.update({
         where: { id },
